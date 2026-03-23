@@ -1,2 +1,7 @@
 .bundle/
 vendor/bundle/
+__pycache__/
+.venv/
+.DS_Store
+output/
+tmp/

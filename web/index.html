@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Selangor Highway Cameras</title>
+    <title>MEX Highway Cameras</title>
     <style>
       :root {
         --bg: #f3efe7;
@@ -44,6 +44,19 @@
         background: var(--panel);
         backdrop-filter: blur(10px);
         box-shadow: var(--shadow);
+      }
+
+      .hero-top {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        margin: -28px -28px 0;
+        padding: 28px 28px 18px;
+        border-bottom: 1px solid var(--border);
+        border-radius: 28px 28px 0 0;
+        background:
+          linear-gradient(180deg, rgba(255, 252, 246, 0.98) 0%, rgba(255, 252, 246, 0.94) 100%);
+        backdrop-filter: blur(14px);
       }
 
       h1 {
@@ -107,6 +120,15 @@
         border-radius: 22px;
         background: rgba(255, 255, 255, 0.78);
         box-shadow: 0 14px 32px rgba(26, 40, 32, 0.08);
+        cursor: zoom-in;
+        transition:
+          transform 160ms ease,
+          box-shadow 160ms ease;
+      }
+
+      .card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 18px 38px rgba(26, 40, 32, 0.14);
       }
 
       .card img {
@@ -150,6 +172,65 @@
         background: rgba(255, 255, 255, 0.6);
       }
 
+      .lightbox[hidden] {
+        display: none;
+      }
+
+      .lightbox {
+        position: fixed;
+        inset: 0;
+        z-index: 30;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: rgba(19, 31, 26, 0.72);
+        backdrop-filter: blur(12px);
+      }
+
+      .lightbox-panel {
+        width: min(1080px, 100%);
+        max-height: calc(100vh - 48px);
+        overflow: auto;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 28px;
+        background: rgba(255, 252, 246, 0.98);
+        box-shadow: 0 28px 80px rgba(0, 0, 0, 0.28);
+      }
+
+      .lightbox-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: start;
+        padding: 20px 20px 0;
+      }
+
+      .lightbox-copy {
+        min-width: 0;
+      }
+
+      .lightbox-copy .eyebrow {
+        margin-bottom: 8px;
+      }
+
+      .lightbox-copy .title {
+        font-size: clamp(1.2rem, 3vw, 1.8rem);
+      }
+
+      .lightbox-close {
+        flex-shrink: 0;
+        min-width: 44px;
+        padding: 10px 14px;
+      }
+
+      .lightbox-image {
+        display: block;
+        width: calc(100% - 40px);
+        margin: 16px 20px 20px;
+        border-radius: 20px;
+        background: #e8e0d3;
+      }
+
       @media (max-width: 720px) {
         .page {
           width: min(100% - 20px, 1200px);
@@ -160,27 +241,67 @@
           padding: 20px;
           border-radius: 22px;
         }
+
+        .hero-top {
+          top: 0;
+          margin: -20px -20px 0;
+          padding: 20px 20px 16px;
+          border-radius: 22px 22px 0 0;
+        }
+
+        .lightbox {
+          padding: 14px;
+        }
+
+        .lightbox-panel {
+          max-height: calc(100vh - 28px);
+          border-radius: 22px;
+        }
+
+        .lightbox-top {
+          padding: 16px 16px 0;
+        }
+
+        .lightbox-image {
+          width: calc(100% - 32px);
+          margin: 14px 16px 16px;
+          border-radius: 16px;
+        }
       }
     </style>
   </head>
   <body>
     <main class="page">
       <section class="hero">
-        <h1>Selangor Highway Cameras</h1>
-        <p class="subtitle">
-          First 20 publicly available live camera feeds currently found from the
-          official Lembaga Lebuhraya Malaysia public CCTV endpoints for
-          Selangor-area highways.
-        </p>
-        <div class="actions">
-          <button id="refreshButton" type="button">Refresh Feeds</button>
-          <div id="meta" class="meta">Loading live feeds…</div>
+        <div class="hero-top">
+          <h1>MEX Highway Cameras</h1>
+          <p class="subtitle">
+            All publicly available live camera feeds currently found for the MEX
+            Highway from the official Lembaga Lebuhraya Malaysia public CCTV
+            endpoints.
+          </p>
+          <div class="actions">
+            <button id="refreshButton" type="button">Refresh Feeds</button>
+            <div id="meta" class="meta">Loading live feeds…</div>
+          </div>
         </div>
         <div id="error" class="error" hidden></div>
         <div id="empty" class="empty" hidden>No live feeds were available.</div>
         <section id="grid" class="grid" aria-live="polite"></section>
       </section>
     </main>
+    <div id="lightbox" class="lightbox" hidden>
+      <div class="lightbox-panel" role="dialog" aria-modal="true" aria-labelledby="lightboxTitle">
+        <div class="lightbox-top">
+          <div class="lightbox-copy">
+            <p id="lightboxHighway" class="eyebrow"></p>
+            <h2 id="lightboxTitle" class="title"></h2>
+          </div>
+          <button id="lightboxClose" class="lightbox-close" type="button" aria-label="Close enlarged camera view">Close</button>
+        </div>
+        <img id="lightboxImage" class="lightbox-image" alt="" />
+      </div>
+    </div>
 
     <script>
       const grid = document.getElementById("grid");
@@ -188,6 +309,11 @@
       const errorBox = document.getElementById("error");
       const emptyBox = document.getElementById("empty");
       const refreshButton = document.getElementById("refreshButton");
+      const lightbox = document.getElementById("lightbox");
+      const lightboxImage = document.getElementById("lightboxImage");
+      const lightboxTitle = document.getElementById("lightboxTitle");
+      const lightboxHighway = document.getElementById("lightboxHighway");
+      const lightboxClose = document.getElementById("lightboxClose");
 
       function escapeHtml(value) {
         return value.replace(/[&<>"']/g, (char) => (
@@ -203,7 +329,15 @@
 
       function renderFeeds(feeds) {
         grid.innerHTML = feeds.map((feed) => `
-          <article class="card">
+          <article
+            class="card"
+            data-image-src="${feed.image_src}"
+            data-camera-name="${escapeHtml(feed.camera_name)}"
+            data-highway-name="${escapeHtml(feed.highway_name)}"
+            tabindex="0"
+            role="button"
+            aria-label="Open larger view for ${escapeHtml(feed.camera_name)}"
+          >
             <img src="${feed.image_src}" alt="${escapeHtml(feed.camera_name)}" />
             <div class="card-body">
               <p class="eyebrow">${escapeHtml(feed.highway_name)}</p>
@@ -212,6 +346,21 @@
             </div>
           </article>
         `).join("");
+      }
+
+      function openLightbox(card) {
+        lightboxImage.src = card.dataset.imageSrc;
+        lightboxImage.alt = card.dataset.cameraName;
+        lightboxTitle.textContent = card.dataset.cameraName;
+        lightboxHighway.textContent = card.dataset.highwayName;
+        lightbox.hidden = false;
+        document.body.style.overflow = "hidden";
+      }
+
+      function closeLightbox() {
+        lightbox.hidden = true;
+        lightboxImage.removeAttribute("src");
+        document.body.style.overflow = "";
       }
 
       async function loadFeeds() {
@@ -248,6 +397,45 @@
           refreshButton.disabled = false;
         }
       }
+
+      grid.addEventListener("click", (event) => {
+        const card = event.target.closest(".card");
+
+        if (!card) {
+          return;
+        }
+
+        openLightbox(card);
+      });
+
+      grid.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") {
+          return;
+        }
+
+        const card = event.target.closest(".card");
+
+        if (!card) {
+          return;
+        }
+
+        event.preventDefault();
+        openLightbox(card);
+      });
+
+      lightbox.addEventListener("click", (event) => {
+        if (event.target === lightbox) {
+          closeLightbox();
+        }
+      });
+
+      lightboxClose.addEventListener("click", closeLightbox);
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !lightbox.hidden) {
+          closeLightbox();
+        }
+      });
 
       refreshButton.addEventListener("click", loadFeeds);
       loadFeeds();

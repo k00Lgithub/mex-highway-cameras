@@ -1,1 +1,1 @@
-web: bundle exec ruby server.rb
+web: gunicorn app:app
