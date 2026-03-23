@@ -1,13 +1,16 @@
 import json
+import logging
 import os
 import re
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from flask import Flask, jsonify, send_file
+from flask import Flask, jsonify, request, send_file
 
 
 PORT = int(os.environ.get("PORT", "4567"))
@@ -26,6 +29,11 @@ IMAGE_PATTERN = re.compile(
 )
 
 app = Flask(__name__)
+app.logger.setLevel(logging.INFO)
+
+CACHE_TTL_SECONDS = int(os.environ.get("FEED_CACHE_TTL_SECONDS", "30"))
+RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60"))
+RATE_LIMIT_MAX_REQUESTS = int(os.environ.get("RATE_LIMIT_MAX_REQUESTS", "30"))
 
 
 class CameraFetcher:
@@ -50,12 +58,17 @@ class CameraFetcher:
                     if limit is not None and len(feeds) >= limit:
                         return feeds[:limit]
             except Exception as exc:
+                app.logger.warning(
+                    "Failed to load feeds for %s: %s",
+                    highway["code"],
+                    exc,
+                )
                 feeds.append(
                     {
                         "id": f'{highway["code"]}-error',
                         "highway_code": highway["code"],
                         "highway_name": highway["name"],
-                        "error": str(exc),
+                        "error": "Feed temporarily unavailable.",
                     }
                 )
 
@@ -144,6 +157,91 @@ class CameraFetcher:
 FETCHER = CameraFetcher()
 
 
+class FeedCache:
+    def __init__(self, ttl_seconds):
+        self.ttl_seconds = ttl_seconds
+        self.lock = threading.Lock()
+        self.cached_payload = None
+        self.cached_at = 0.0
+
+    def get_payload(self):
+        now = time.time()
+
+        with self.lock:
+            if self.cached_payload is not None and now - self.cached_at < self.ttl_seconds:
+                return self.cached_payload
+
+            payload = {
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "source": "Lembaga Lebuhraya Malaysia public CCTV endpoints",
+                "highways": TARGET_HIGHWAYS,
+                "feeds": FETCHER.fetch(),
+            }
+            self.cached_payload = payload
+            self.cached_at = now
+            return payload
+
+
+FEED_CACHE = FeedCache(CACHE_TTL_SECONDS)
+
+
+class RateLimiter:
+    def __init__(self, window_seconds, max_requests):
+        self.window_seconds = window_seconds
+        self.max_requests = max_requests
+        self.lock = threading.Lock()
+        self.requests_by_ip = {}
+
+    def allow(self, client_ip):
+        now = time.time()
+
+        with self.lock:
+            request_times = self.requests_by_ip.get(client_ip, [])
+            request_times = [timestamp for timestamp in request_times if now - timestamp < self.window_seconds]
+
+            if len(request_times) >= self.max_requests:
+                self.requests_by_ip[client_ip] = request_times
+                return False
+
+            request_times.append(now)
+            self.requests_by_ip[client_ip] = request_times
+            return True
+
+
+RATE_LIMITER = RateLimiter(RATE_LIMIT_WINDOW_SECONDS, RATE_LIMIT_MAX_REQUESTS)
+
+
+@app.before_request
+def enforce_rate_limit():
+    if request.path != "/api/feeds":
+        return None
+
+    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+
+    if RATE_LIMITER.allow(client_ip):
+        return None
+
+    app.logger.warning("Rate limit exceeded for %s", client_ip)
+    return jsonify({"error": "Too many requests. Please try again shortly."}), 429
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "img-src 'self' data: https:; "
+        "style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "connect-src 'self'; "
+        "base-uri 'none'; "
+        "frame-ancestors 'none'"
+    )
+    return response
+
+
 @app.get("/")
 def index():
     return send_file(Path(__file__).with_name("web").joinpath("index.html"))
@@ -152,16 +250,10 @@ def index():
 @app.get("/api/feeds")
 def feeds():
     try:
-        return jsonify(
-            {
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-                "source": "Lembaga Lebuhraya Malaysia public CCTV endpoints",
-                "highways": TARGET_HIGHWAYS,
-                "feeds": FETCHER.fetch(),
-            }
-        )
+        return jsonify(FEED_CACHE.get_payload())
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 502
+        app.logger.exception("Failed to load feeds: %s", exc)
+        return jsonify({"error": "Unable to load feeds right now."}), 502
 
 
 if __name__ == "__main__":
